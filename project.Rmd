@@ -15,6 +15,7 @@ project
 ```{r }
 library(MASS)
 library(LaplacesDemon)
+library(vroom)
 ```
 
 ```{r }
@@ -216,42 +217,90 @@ transition_probability=function(theta1, theta2,data){
   min(1,exp(tds2-tds1))
 }
 
+filepath<-"/Users/lijianyu/Personal/documents/WPI/MA556/project/theta.tsv"
 
-
-theta=list()
-theta1=t(beta_hat)
-M=11000
-j=1
-theta[[j]]=theta1
-accepts=0
-rejects=0
-skip=0
-
-while(accepts<=M){
-  theta2=t(as.matrix(mvrnorm(1,theta1,sigma)))
-  r=transition_probability(theta1,theta2,data)
-  skip=skip-1
-  if(skip<0){
-    if(runif(1,0,1)<r){
-      accepts=accepts+1
-      j=j+1
-      theta1=theta2
-      theta[[j]]=theta1
-    }else{
-      rejects=rejects+1
+if(file.exists(filepath)){
+  x=vroom(filepath)
+  theta2=as.data.frame(x)
+}else{
+  theta=list()
+  theta1=t(beta_hat)
+  M=11000
+  j=1
+  theta[[j]]=theta1
+  accepts=0
+  rejects=0
+  skip=0
+  
+  while(accepts<=M){
+    theta2=t(as.matrix(mvrnorm(1,theta1,sigma)))
+    r=transition_probability(theta1,theta2,data)
+    skip=skip-1
+    if(skip<0){
+      if(runif(1,0,1)<r){
+        accepts=accepts+1
+        j=j+1
+        theta1=theta2
+        theta[[j]]=theta1
+      }else{
+        rejects=rejects+1
+      }
     }
   }
+  
+  cat('acception ratio for nu=',nu[i],'is',accepts/(accepts+rejects),'\n') # we got 0.552 here
+  
+  writeLines("x1\tx2\tx3\tx4\tx5", filepath)
+  con=file(filepath,'a')
+  for(line in theta){
+    writeLines(paste(line,collapse='\t'),con)
+  }
+  close(con)
+  accepts=11001
+  rejects=8901
+  
+  theta2=do.call(rbind.data.frame, theta)
 }
 
-cat('acception ratio for nu=',nu[i],'is',accepts/(accepts+rejects),'\n') # we got 0.556 here
 
-theta2=theta[seq(1001,M,10)]
-theta2=theta2[seq]
 
 ```
 acception ratio is  $accepts/(accepts+rejects)$ 
 
 ```{r }
+theta3=theta2[seq(1001,M,10),]
+
+# chains=as.mcmc.list(lapply(as.data.frame(theta3), mcmc))
+# summary(chains)
+# traceplot(chains)
+# plot(chains)
+mcmc_x1=as.mcmc(theta3$x1)
+plot(mcmc_x1)
+
+```
+```{r }
+
+mcmc_x2=as.mcmc(theta3$x2)
+plot(mcmc_x2)
+
+```
+```{r }
+
+mcmc_x3=as.mcmc(theta3$x3)
+plot(mcmc_x3)
+
+```
+```{r }
+
+mcmc_x4=as.mcmc(theta3$x4)
+plot(mcmc_x4)
+
+```
+```{r }
+
+mcmc_x5=as.mcmc(theta3$x5)
+plot(mcmc_x5)
+
 ```
 
 ## Including Plots
