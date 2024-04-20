@@ -1,0 +1,260 @@
+---
+title: "MA556 project"
+output: html_document
+date: "2024-04-20"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## MA556 project
+
+project
+
+```{r }
+library(MASS)
+library(LaplacesDemon)
+```
+
+```{r }
+datafile='/Users/lijianyu/Personal/documents/WPI/MA556/project/project-chromosome.dat'
+con = file(datafile, "r")
+lines=readLines(con)
+lines=sapply(lines,function(line){
+  x=unname(gsub('\\s+','\t',line))
+  sub('^\\t','',x)
+})
+N=439
+data=data.frame(id=1:N,x1=rep(NA,N),x2=rep(NA,N),x3=rep(NA,N),x4=rep(NA,N),x5=rep(NA,N),y=rep(NA,N))
+for(i in 1:N){
+  line=lines[i]
+  fields=unlist(strsplit(line,'\t'))
+  x1=fields[2] # intercept
+  x2=fields[3] # control/treatment
+  x3=fields[4] # age
+  x4=fields[5] # sex, mail-1, female-0
+  x5=fields[6] # mercury in blood
+  y=fields[7] # %Cu (chromosome damage)
+  data$x1[i]=as.numeric(x1)
+  data$x2[i]=as.numeric(x2)
+  data$x3[i]=as.numeric(x3)
+  data$x4[i]=as.numeric(x4)
+  # data$x5[i]=as.numeric(x5)
+  # data$y[i]=as.numeric(y)
+  data$x5[i]=ifelse(x5=='9999.0',NA,as.numeric(x5))
+  data$y[i]=ifelse(y=='9999.0',NA,as.numeric(y))
+}
+data$sampling=c(rep(1,39),rep(0,439-39))
+#impute x5 (mercury level)
+n=39 #samples with known x5
+y=data$x5[1:n]
+X=as.matrix(data[1:n,c('x1','x2','x3','x4')])
+X_t=t(X)
+beta_hat=solve(X_t%*%X)%*%X_t%*%y
+for(i in (n+1):nrow(data)){
+  x=data[i,c('x1','x2','x3','x4')]
+  data$x5[i]=(unlist(x)%*%beta_hat)[1,1]
+}
+
+
+#step1 use student t as the proposal generating density, the accepton rate is below 5%. not use it. see below for alternative ways (normal distribution)
+#metropolis sampling
+#use data[1:39,] 
+N=439
+v=as.matrix(data[1:N,c('x1','x2','x3','x4','x5')])
+v_t=t(v)
+y=data$sampling
+beta_hat=solve(v_t%*%v)%*%v_t%*%y
+
+
+#the matrix sigma
+sigma=NA
+
+for(i in 1:N){
+  v_i=t(data[i,c('x1','x2','x3','x4','x5')]) #column vector
+  v_it=t(v_i) #vector
+  
+  s=log(v_i%*%v_it)+(v_it%*%beta_hat)[1,1]-2*log(1+exp((v_it%*%beta_hat)[1,]))
+  s=exp(s)
+  
+  if(any(is.na(sigma))){
+    cat('use first sigma\n')
+    sigma=s
+  }else{
+    sigma=sigma+s
+  }
+}
+# sigma=round(sigma)
+sigma=solve(sigma)
+sigma=(sigma+t(sigma))/2. #to make it symmetrical
+
+#target density: f(thea | I)
+#candidate generating density: student t(beta_hat, v=N-4,sigma)
+
+log_target_density=function(psi,X,y){
+  #calculate target density, input psi is the column vector of covariant coefficients
+  sum(sapply(1:nrow(X),function(i){
+    v_i=t(X[i,]) #column vector
+    v_it=t(v_i) #vector
+    # y=data$sampling #known result
+    z=v_it%*%t(psi)
+    if(z>700)z=700
+    x=(z*y[i])-log(1+exp(z))
+    x
+  }))
+}
+
+transition_probability=function(theta1, theta2,df,sigma,data){
+  #calculate transition_probability for Metropolis
+  X=data[,c('x1','x2','x3','x4','x5')]
+  y=data$sampling
+  tds2=log_target_density(theta2,X,y)-log(dmvt(theta2,mu=t(beta_hat),S=sigma,df=df))
+  tds1=log_target_density(theta1,X,y)-log(dmvt(theta1,mu=t(beta_hat),S=sigma,df=df))
+  min(1,exp(tds2-tds1))
+}
+
+#test different nu to get sample ratio (0.25,0.75)
+nu=c(5,100,200,10,20,30,40,50)
+
+for(i in 1:length(nu)){
+  cat('i=',i,'nu[i]=',nu[i],'\n')
+  theta=list()
+  # theta1=matrix(c(1,1,1,1),nrow=1,dimnames=list(NULL,c('x1','x3','x4','x5')))
+  theta1=t(beta_hat)
+  M=100
+  j=1
+  theta[[j]]=theta1
+  accepts=0
+  rejects=0
+  skip=0
+  while(rejects+accepts<=M){
+    theta2=rmvt(1,mu=t(beta_hat), S=sigma,df=nu[i])
+    r=transition_probability(theta1,theta2,nu[i],sigma,data)
+    skip=skip-1
+    if(skip<0){
+      if(runif(1,0,1)<r){
+        accepts=accepts+1
+        j=j+1
+        theta1=theta2
+        theta[[j]]=theta1
+      }else{
+        rejects=rejects+1
+      }
+    }
+  }
+  
+  cat('acception ratio for nu=',nu[i],'is',accepts/(accepts+rejects),'\n')
+}
+# i= 1 nu[i]= 10 
+# acception ratio for nu= 10 is 0.01980198 
+# i= 2 nu[i]= 20 
+# acception ratio for nu= 20 is 0.05940594 
+# i= 3 nu[i]= 30 
+# acception ratio for nu= 30 is 0.04950495 
+# i= 4 nu[i]= 40 
+# acception ratio for nu= 40 is 0.02970297 
+# i= 5 nu[i]= 50 
+# acception ratio for nu= 50 is 0.03960396 
+
+
+
+
+#step1: use normal density to propose new moves
+#metropolis sampling
+#use data[1:39,] 
+N=439
+v=as.matrix(data[1:N,c('x1','x2','x3','x4','x5')])
+v_t=t(v)
+y=c(rep(1,39),rep(0,439-39))
+beta_hat=solve(v_t%*%v)%*%v_t%*%y
+
+
+#the matrix sigma
+sigma=NA
+
+for(i in 1:N){
+  v_i=t(data[i,c('x1','x2','x3','x4','x5')]) #column vector
+  v_it=t(v_i) #vector
+  
+  s=log(v_i%*%v_it)+(v_it%*%beta_hat)[1,1]-2*log(1+exp((v_it%*%beta_hat)[1,]))
+  s=exp(s)
+  
+  if(any(is.na(sigma))){
+    cat('use first sigma\n')
+    sigma=s
+  }else{
+    sigma=sigma+s
+  }
+}
+# sigma=round(sigma)
+sigma=solve(sigma)
+sigma=(sigma+t(sigma))/2. #to make it symmetrical
+
+#target density: f(thea | I)
+#candidate generating density: student t(beta_hat, v=N-4,sigma)
+
+log_target_density=function(psi,X,y){
+  #calculate target density, input psi is the column vector of covariant coefficients
+  sum(sapply(1:nrow(X),function(i){
+    v_i=t(X[i,]) #column vector
+    v_it=t(v_i) #vector
+    # y=data$sampling #known result
+    z=v_it%*%t(psi)
+    if(z>700)z=700
+    x=(z*y[i])-log(1+exp(z))
+    x
+  }))
+}
+
+transition_probability=function(theta1, theta2,data){
+  #calculate transition_probability for Metropolis
+  X=data[,c('x1','x2','x3','x4','x5')]
+  y=data$sampling
+  tds2=log_target_density(theta2,X,y)
+  tds1=log_target_density(theta1,X,y)
+  min(1,exp(tds2-tds1))
+}
+
+
+#test different nu to get sample ratio (0.25,0.75)
+
+theta=list()
+# theta1=matrix(c(1,1,1,1),nrow=1,dimnames=list(NULL,c('x1','x3','x4','x5')))
+theta1=t(beta_hat)
+M=11000
+j=1
+theta[[j]]=theta1
+accepts=0
+rejects=0
+skip=0
+
+while(rejects+accepts<=M){
+  theta2=t(as.matrix(mvrnorm(1,theta1,sigma)))
+  r=transition_probability(theta1,theta2,data)
+  skip=skip-1
+  if(skip<0){
+    if(runif(1,0,1)<r){
+      accepts=accepts+1
+      j=j+1
+      theta1=theta2
+      theta[[j]]=theta1
+    }else{
+      rejects=rejects+1
+    }
+  }
+}
+
+cat('acception ratio for nu=',nu[i],'is',accepts/(accepts+rejects),'\n')
+
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
