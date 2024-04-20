@@ -217,10 +217,8 @@ transition_probability=function(theta1, theta2,data){
 }
 
 
-#test different nu to get sample ratio (0.25,0.75)
 
 theta=list()
-# theta1=matrix(c(1,1,1,1),nrow=1,dimnames=list(NULL,c('x1','x3','x4','x5')))
 theta1=t(beta_hat)
 M=11000
 j=1
@@ -229,7 +227,7 @@ accepts=0
 rejects=0
 skip=0
 
-while(rejects+accepts<=M){
+while(accepts<=M){
   theta2=t(as.matrix(mvrnorm(1,theta1,sigma)))
   r=transition_probability(theta1,theta2,data)
   skip=skip-1
@@ -245,8 +243,15 @@ while(rejects+accepts<=M){
   }
 }
 
-cat('acception ratio for nu=',nu[i],'is',accepts/(accepts+rejects),'\n')
+cat('acception ratio for nu=',nu[i],'is',accepts/(accepts+rejects),'\n') # we got 0.556 here
 
+theta2=theta[seq(1001,M,10)]
+theta2=theta2[seq]
+
+```
+acception ratio is  $accepts/(accepts+rejects)$ 
+
+```{r }
 ```
 
 ## Including Plots
