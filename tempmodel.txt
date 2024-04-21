@@ -1,0 +1,19 @@
+
+  model{
+    for(i in 1:n){
+        dmat[2*i+1,2*i+1]=sigma0^2/w[i]
+        dmat[2*i+1,2*i+2]=rho*sigma0*sigma1/w[i]
+        dmat[2*i+2,2*i+1]=rho*sigma0*sigma1/w[i]
+        dmat[2*i+2,2*i+2]=sigma1^2/w[i]
+        mu[0]=inprod(v[i,],beta0)
+        mu[1]=t+inprod(v[i,],beta0)
+        y[i,]~dmnorm(mu,dmat[(2*i+1):(2*i+2),(2*i+1):(2*i+2)])
+    }
+    rho~dunif(0,1)
+    t~dexp(0.0001)
+    beta0~dmnorm(b0,identity)
+    sigma0~dunif(0,1)
+    sigma1~dunif(0,1)
+  }
+
+

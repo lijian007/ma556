@@ -16,6 +16,7 @@ project
 library(MASS)
 library(LaplacesDemon)
 library(vroom)
+library(rjags)
 ```
 
 ```{r }
@@ -217,15 +218,20 @@ transition_probability=function(theta1, theta2,data){
   min(1,exp(tds2-tds1))
 }
 
-filepath<-"/Users/lijianyu/Personal/documents/WPI/MA556/project/theta.tsv"
+# filepath<-"/Users/lijianyu/Personal/documents/WPI/MA556/project/theta.tsv"
+filepath<-"/Users/lijianyu/Personal/documents/WPI/MA556/project/theta_large.tsv"
 
 if(file.exists(filepath)){
   x=vroom(filepath)
   theta2=as.data.frame(x)
+  accepts=110001
+  rejects=88803
+  M=110000
+
 }else{
   theta=list()
   theta1=t(beta_hat)
-  M=11000
+  M=110000
   j=1
   theta[[j]]=theta1
   accepts=0
@@ -233,6 +239,7 @@ if(file.exists(filepath)){
   skip=0
   
   while(accepts<=M){
+    if(j%%2000==0)cat('j=',j,'\n')
     theta2=t(as.matrix(mvrnorm(1,theta1,sigma)))
     r=transition_probability(theta1,theta2,data)
     skip=skip-1
@@ -248,7 +255,7 @@ if(file.exists(filepath)){
     }
   }
   
-  cat('acception ratio for nu=',nu[i],'is',accepts/(accepts+rejects),'\n') # we got 0.552 here
+  cat('acception ratio for nu=is',accepts/(accepts+rejects),'\n') # we got 0.552 here
   
   writeLines("x1\tx2\tx3\tx4\tx5", filepath)
   con=file(filepath,'a')
@@ -256,8 +263,6 @@ if(file.exists(filepath)){
     writeLines(paste(line,collapse='\t'),con)
   }
   close(con)
-  accepts=11001
-  rejects=8901
   
   theta2=do.call(rbind.data.frame, theta)
 }
@@ -268,9 +273,9 @@ if(file.exists(filepath)){
 acception ratio is  $accepts/(accepts+rejects)$ 
 
 ```{r }
-theta3=theta2[seq(1001,M,10),]
+theta3=theta2[seq(1001,M,100),]
 
-# chains=as.mcmc.list(lapply(as.data.frame(theta3), mcmc))
+chains=as.mcmc.list(lapply(as.data.frame(theta3), mcmc))
 # summary(chains)
 # traceplot(chains)
 # plot(chains)
@@ -302,7 +307,172 @@ mcmc_x5=as.mcmc(theta3$x5)
 plot(mcmc_x5)
 
 ```
+```{r }
+autocorr(chains, lags = c( 1, 5, 10, 50))
+autocorr.plot(chains)
 
+```
+
+
+
+```{r }
+x=effectiveSize(as.mcmc(theta3$x1))
+x
+```
+
+
+```{r }
+x=geweke.diag(chains, frac1=0.1, frac2=0.5)
+x
+pnorm(x$x1$z)
+pnorm(x$x2$z)
+
+```
+
+```{r }
+batchSE(as.mcmc(theta3), batchSize=100)
+
+```
+
+
+```{r }
+#step 2 and step 3
+n_theta=nrow(theta3)
+n=39
+N=439
+list2=list()
+
+for(k in 1:n_theta){
+  psi_k=t(theta3[k,]) #column vector
+  sampling_rate=0
+  pi_i=list()
+  for(i in 1:n){
+    v_i=t(data[i,c('x1','x2','x3','x4','x5')]) #column vector
+    v_it=t(v_i) #vector
+    t=v_it%*%psi_k
+    if(t>700)t=700
+    pi_i[[i]]=exp(t-log(1+exp(t))) 
+    sampling_rate=sampling_rate+1/pi_i[[i]]
+  }
+  list2[[k]]=list(k=k,psi=psi_k,pi=pi_i, sampling_rate=sampling_rate,distance=abs(sampling_rate-N))
+}
+
+#step 3, find the best psi and the corresponding pi
+min_distance=min(sapply(list2,function(x){x$distance}))
+best_pi=unlist(list2[[which(sapply(list2,function(x){x$distance==min_distance}))]]$pi)
+best_pi
+
+
+
+
+```
+```{r }
+#step 4.calculate W
+W=rep(NA,n)
+N=439
+for(i in 1:n){
+  W[i]=N*1/best_pi[i]/sum(1/best_pi)
+}
+
+W
+
+```
+```{r }
+#step 5.calculate n_hat
+n_hat=sum(W)^2/sum(W^2)
+n_hat
+```
+```{r }
+#step 6.calculate w
+w=n_hat*W/sum(W)
+
+w
+
+```
+```{r }
+#step 7.impute missing y0, y1
+
+data_y0=data[data$sampling==1&data$x2==0,]
+data_y1=data[data$sampling==1&data$x2==1,]
+
+
+
+X_y0=as.matrix(data_y0[,c('x1','x3','x4','x5')])
+X_y1=as.matrix(data_y1[,c('x1','x3','x4','x5')])
+X_y0_t=t(X_y0)
+X_y1_t=t(X_y1)
+
+beta_hat_y0=solve(X_y0_t%*%X_y0)%*%X_y0_t%*%data_y0$y
+beta_hat_y1=solve(X_y1_t%*%X_y1)%*%X_y1_t%*%data_y1$y
+data$y0=NA
+data$y1=NA
+for(i in 1:n){
+  x=data[i,c('x1','x3','x4','x5')]
+  data$y0[i]=(unlist(x)%*%beta_hat_y0)[1,1]
+  data$y1[i]=(unlist(x)%*%beta_hat_y1)[1,1]
+}
+data[1:n,]
+
+```
+
+```{r }
+#step 8.calculate posterior beta0, t, deta0, deta1, ro
+#starting values
+df=as.matrix(data[1:n,c('x1','x2','x3','x4','x5')])
+df_t=t(df)
+beta0=solve(df_t%*%df)%*%df_t%*%data[1:n,'y']
+t=mean(data_y1$y)/mean(data_y0$y)
+sigma0=sd(data_y0$y)
+sigma1=sd(data_y1$y)
+n=39
+model.data=list(
+  y=data[1:n,c('y0','y1')],
+  w=w,
+  v=data[1:n,c('x1','x2','x3','x4','x5')],
+  n=n,
+  identity=matrix(c(1,0,0,1),nrow=2,ncol=2),
+  b0=beta0
+  
+)
+# model.params=c('t','beta0','sigma0','sigma1','rho',)
+model.inits=list(t=t,beta0=beta0,sigma0=sigma0,sigma1=sigma1,rho=0.5)
+iterations=11000
+modelString="
+  model{
+    for(i in 1:n){
+        dmat[i,1,1]=sigma0^2/w[i]
+        dmat[i,1,2]=rho*sigma0*sigma1/w[i]
+        dmat[i,2,1]=rho*sigma0*sigma1/w[i]
+        dmat[i,2,2]=sigma1^2/w[i]
+        mu[0]=inprod(v[i,],beta0)
+        mu[1]=t+inprod(v[i,],beta0)
+        y[i,]~dmnorm(mu,matrix(1,1,1,1))
+    }
+    rho~dunif(0,1)
+    t~dexp(0.0001)
+    beta0~dmnorm(b0,identity)
+    sigma0~dunif(0,1)
+    sigma1~dunif(0,1)
+  }
+
+"
+writeLines(modelString,con="tempmodel.txt")
+jagsModel=jags.model(file="tempmodel.txt",data=model.data,inits=model.inits)
+
+
+density=function(beta0,t,sigma0,sigma1,rho,w,data,n){
+  #data has columns: x1, x2, x3,x4, x5,y0,y1
+  #n=39
+  A=sapply(1:n,function(i){
+    (data[i,'y0']-data[i,c('x1','x2','x3','x4','x5')]%*%beta0)
+  })
+  1/(sigma0*sigma1*sqrt(1-rho^2))*exp(-1/2/(1-rho^2)*(sum()))
+}
+
+for(i in 1:M){
+  
+}
+```
 ## Including Plots
 
 You can also embed plots, for example:
