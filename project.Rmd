@@ -440,13 +440,13 @@ iterations=11000
 modelString="
   model{
     for(i in 1:n){
-        dmat[i,1,1]=sigma0^2/w[i]
-        dmat[i,1,2]=rho*sigma0*sigma1/w[i]
-        dmat[i,2,1]=rho*sigma0*sigma1/w[i]
-        dmat[i,2,2]=sigma1^2/w[i]
+        dmat[2*i+1,2*i+1]=sigma0^2/w[i]
+        dmat[2*i+1,2*i+2]=rho*sigma0*sigma1/w[i]
+        dmat[2*i+2,2*i+1]=rho*sigma0*sigma1/w[i]
+        dmat[2*i+2,2*i+2]=sigma1^2/w[i]
         mu[0]=inprod(v[i,],beta0)
         mu[1]=t+inprod(v[i,],beta0)
-        y[i,]~dmnorm(mu,matrix(1,1,1,1))
+        y[i,]~dmnorm(mu,dmat[(2*i+1):(2*i+2),(2*i+1):(2*i+2)])
     }
     rho~dunif(0,1)
     t~dexp(0.0001)
@@ -471,6 +471,165 @@ density=function(beta0,t,sigma0,sigma1,rho,w,data,n){
 
 for(i in 1:M){
   
+}
+```
+```{r}
+n=39
+y0 = data[1:n,'y0']
+y1 = data[1:n,'y1']
+tau = rep(0,11000)
+beta = list()
+sigma0 = rep(0,11000)
+sigma1 = rep(0,11000)
+rho = rep(0,11000)
+sigma0[1] = var(y0);
+sigma01 = sigma0[1]
+sigma1[1] = var(y1);
+sigma11 = sigma1[1]
+mod = lm(y~x2+x3+x4+x5,data=data[1:n,])
+tau[1] = coef(mod)['x2'];
+tau1= tau[1]
+rho[1] = cor(y0,y1);
+rho1 = rho[1]
+beta[[1]] = t(coef(mod));
+beta1 = t(beta[[1]])
+
+set.seed(123)
+
+
+s=seq(0.01,0.99,0.001)
+grid_sampler=function(lh,s){
+  h=exp(lh-max(lh))/sum(exp(lh-max(lh)))
+  draw=sample(s,1, prob=h)
+  draw_jitter=runif(1,draw-0.0005,draw+0.0005)
+  draw_jitter
+}
+cpd_sigma1=function(beta0,tau,sigma0,rho,w,xdata,n,s){
+  #return log density for all values in s
+  t=tau
+  d=rep(NA,length(s))
+  for(k in 1:length(s)){
+    h=s[k]
+    A=sapply(1:n,function(i){(xdata[i,'y0']-as.matrix(xdata[i,c('x1','x2','x3','x4','x5')])%*%beta0)/(sigma0/sqrt(w[i]))})
+    Bp=sapply(1:n,function(i){(xdata[i,'y1']-(t+as.matrix(xdata[i,c('x1','x2','x3','x4','x5')])%*%beta0))/((1/h-1)/sqrt(w[i]))})
+    d_1=-n*log(1/h-1)-1/(2*(1-rho**2))*(-2*rho*sum(A*Bp)+sum(Bp**2))-2*log(h)
+    d[k]=d_1
+    
+  }
+  d
+}
+
+
+
+density=function(beta0,tau,sigma0,sigma1,rho,w,xdata,n){
+  #data has columns: x1, x2, x3,x4, x5,y0,y1
+  #n=39
+  t=tau
+  A=sapply(1:n,function(i){
+    (xdata[i,'y0']-as.matrix(xdata[i,c('x1','x2','x3','x4','x5')])%*%beta0)/(sigma0/sqrt(w[i]))
+  })
+  # print(A)
+  B=sapply(1:n,function(i){
+    (xdata[i,'y1']-(t+as.matrix(xdata[i,c('x1','x2','x3','x4','x5')])%*%beta0))/(sigma1/sqrt(w[i]))
+  })
+  # print(B)
+  ev=-1/(2*(1-rho^2))*(sum(A^2))-2*rho*sum(A*B)+sum(B**2)
+  # print('ev')
+  # print(ev)
+  # print(n)
+  if(ev>100)ev=100
+  # print(sigma0)
+  # print(sigma1)
+  # print('1-roh2')
+  # print((1-rho^2))
+  # print(sigma0*sigma1*sqrt(1-rho^2))
+  if((sigma0*sigma1*sqrt(1-rho^2))^n<1e-100){
+    return(1e-100)
+  }
+  # print((sigma0*sigma1*sqrt(1-rho^2))^n)
+  # print((sigma0*sigma1*sqrt(1-rho^2))^n*exp(ev))
+  1/(sigma0*sigma1*sqrt(1-rho^2))^n*exp(ev)
+}
+
+accepts_beta=0
+rejects_beta=0
+
+accepts_sigma0=0
+rejects_sigma0=0
+
+
+
+accepts_tau=0
+rejects_tau=0
+
+accepts_rho=0
+rejects_rho=0
+for(j in 2:30) {
+      if(j%%100==0)cat('j=',j,'\n')
+      #draw beta
+      flag=T
+      while(flag){
+        beta2 = as.matrix(mvrnorm(n = 1, mu=beta1, Sigma = diag(5)))
+        U = runif(1)
+        if (U <= density(beta2,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
+          beta1 = beta2
+          beta[[j]] = beta2
+          flag=F
+          accepts_beta=accepts_beta+1
+        }else{
+          rejects_beta=rejects_beta+1
+        }
+      }
+      
+      #draw sigma0
+      flag=T
+      while(flag){
+        sigma02 =  rnorm(1,mean=sigma01,sd=0.01)
+        U =runif(1)
+        if (U <= density(beta1,tau1,sigma02,sigma11,rho1,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
+          sigma01 = sigma02
+          sigma0[j] = sigma01
+          flag=F
+          accepts_sigma0=accepts_sigma0+1
+        }else{
+          rejects_sigma0=rejects_sigma0+1
+        }
+      }
+      
+      #draw sigma1 using grid method
+      sigma12 =grid_sampler(cpd_sigma1(beta1,tau1,sigma01,rho1,w,data[1:n,],n,s),s)
+      sigma11 = sigma12
+      sigma1[j] = sigma11
+
+      #draw tau
+      flag=T
+      while(flag){
+        tau2 = rnorm(n = 1, mean = tau1, sd = 0.7931246)
+        U = runif(1)
+        if (U <= density(beta1,tau2,sigma01,sigma11,rho1,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
+          tau1 = tau2
+          tau[j] = tau1
+          flag=F
+          accepts_tau=accepts_tau+1
+        }else{
+          rejects_tau=rejects_tau+1
+        }
+      }
+     #draw rho
+      flag=T
+      while(flag){
+        rho2 = rnorm(1,mean=rho1,sd=0.01)
+        U = runif(1)
+        if (U <= density(beta1,tau1,sigma01,sigma11,rho2,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
+          rho1 = rho2
+          rho[j] = rho1
+          flag=F
+          accepts_rho=accepts_rho+1
+        }else{
+          rejects_rho=rejects_rho+1
+        }
+  
+      }
 }
 ```
 ## Including Plots

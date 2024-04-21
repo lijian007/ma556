@@ -1,0 +1,368 @@
+---
+title: "MA556 Project"
+author: "Yanping Pei"
+date: "2024-03-31"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Packages
+```{r}
+library(dplyr)
+library(mvtnorm)
+library(MASS)
+```
+
+read data
+```{r}
+path = "D:/2.Graduate Courses/MA556 Applied Bayesian Statistics/Project/Project-chromosome.dat"
+dat = read.table(path,header=FALSE)
+N = length(dat[,1])
+colnames(dat) = c("id", "x1(intercept)", "x2(control/treatment)", "x3(age)", "x4(sex)", "z(mercury in blood)", "y(%Cu)")
+colnames(dat) = c("id", "x1", "x2", "x3", "x4", "x5", "y")
+dat$sampling = c(rep(1,39),rep(0,439-39))
+```
+
+
+1. Impute missing mercury in blood within non-samples using model fitted within samples
+```{r}
+dat_samp = dat[1:39,]
+mod_imputation = lm(x5~x2+x3+x4,data=dat_samp)
+y = dat_samp$x5
+X = model.matrix(mod_imputation)
+gamma_hat = solve(t(X)%*%X)%*%t(X)%*%y
+delta_squared = var(y)
+gamma_var = delta_squared*solve(t(X)%*%X)
+```
+
+draw samples from posterior distribution of gamma
+```{r}
+set.seed(123)
+gammas = rmvt(n=400,delta=t(gamma_hat),sigma=solve(gamma_var),df=35)
+```
+
+get predictions
+```{r}
+Xnew = dat[40:439,2:5]
+zImputation = rep(0,400)
+for (i in 1:400){
+  zImputation[i] = t(gamma_hat)%*%t(Xnew[i,])
+}
+dat[40:439,6] = zImputation
+```
+
+
+2. Use logistic regression to get the original survey weights
+```{r}
+mod = lm(sampling~x2+x3+x4+x5,data=dat)
+X_mod = model.matrix(mod)
+```
+
+Metropolis sampler
+
+(1) mean and variance
+```{r}
+phi_hat = solve(t(X_mod)%*%X_mod)%*%t(X_mod)%*%dat$sampling
+Hessian_matrix = function(phi){
+  variance=NA
+  for(i in 1:N){
+    nu = t(X_mod[i,])
+    phi_var=log(t(nu)%*%nu)+(nu%*%phi_hat)[1,1]-2*log(1+exp((nu%*%phi_hat)[1,1]))
+    phi_var = exp(phi_var)
+    if (any(is.na(variance))){
+      variance = phi_var
+    }else{
+      variance = variance+phi_var
+    }
+  }
+  return(variance)
+}
+variance = Hessian_matrix(phi_hat)
+variance = (solve(variance)+t(solve(variance)))/2
+```
+
+(2) target density & transition probability
+```{r}
+#target density: f(thea | I)
+#candidate generating density: student t(beta_hat, v=N-4,sigma)
+
+log_target_density=function(psi,X,y){
+  #calculate target density, input psi is the column vector of covariant coefficients
+  sum(sapply(1:nrow(X),function(i){
+    v_i=t(X[i,]) #column vector
+    v_it=t(v_i) #vector
+    # y=data$sampling #known result
+    z=v_it%*%t(psi)
+    if(z>700)z=700
+    x=(z*y[i])-log(1+exp(z))
+    x
+  }))
+}
+
+transition_probability=function(theta1,theta2,data){
+  #calculate transition_probability for Metropolis
+  X=data[,c('x1','x2','x3','x4','x5')]
+  y=data$sampling
+  tds2=log_target_density(theta2,X,y)
+  tds1=log_target_density(theta1,X,y)
+  min(1,exp(tds2-tds1))
+}
+```
+
+(3) Metropolis sampler realization & df tuning
+```{r}
+#tune nu to get accepting ratio (0.25,0.75)
+#nu = c(5,20,30)
+#for(i in 1:length(nu)) {
+  #cat('i=', i, 'nu[i]=', nu[i], '\n')
+  phi = list()
+  phi1 = phi_hat
+  M = 11000
+  phi[[1]] = phi
+  accepts = 0
+  rejects = 0
+  skip = 0
+  for(iteration in 1:M) {
+    if (accepts+rejects >= M) break
+    phi2 = mvrnorm(1,phi1,variance)
+    r = transition_probability(phi1,phi2,dat)
+    skip = skip - 1
+    if (skip < 0) {
+      if (runif(1) <= r) {
+        accepts = accepts+1
+        phi1 = phi2
+        phi[[accepts+rejects+1]] = phi1
+      } else {
+        rejects = rejects+1
+        phi[[accepts+rejects+1]] = phi1
+      }
+    }
+  }
+  #cat('accepting ratio for nu =', nu[i],'is',accepts/(accepts+rejects), '\n')
+#}
+```
+```{r}
+saveRDS(phi, "phi.rds")
+#phi = readRDS("phi.rds")
+```
+
+
+(4) burn in and skip to avoid autocorrelation
+```{r}
+list = phi[-(1:1001)]
+list = list[seq(1,length(list), by = 10)]
+```
+
+(5) diagnostics
+Convergence of the Metropolis sampler
+```{r}
+library(coda)
+library(matrixStats)
+```
+
+```{r}
+phiSamp = do.call(rbind,phi)
+```
+
+
+Geweke test
+```{r}
+chain1 = mcmc(as.vector(do.call(rbind,phiSamp[,1])));traceplot(chain1);geweke.diag(chain1);effectiveSize(chain1);autocorr(chain1)
+chain2 = mcmc(as.vector(do.call(rbind,phiSamp[,2])));traceplot(chain2);geweke.diag(chain2);effectiveSize(chain2);autocorr(chain2)
+chain3 = mcmc(as.vector(do.call(rbind,phiSamp[,3])));traceplot(chain3);geweke.diag(chain3);effectiveSize(chain3);autocorr(chain3)
+chain4 = mcmc(as.vector(do.call(rbind,phiSamp[,4])));traceplot(chain4);geweke.diag(chain4);effectiveSize(chain4);autocorr(chain4)
+chain5 = mcmc(as.vector(do.call(rbind,phiSamp[,5])));traceplot(chain5);geweke.diag(chain5);effectiveSize(chain5);autocorr(chain5)
+```
+```{r}
+NSE = function(samples,batch_size) {
+  n = length(samples)
+  num_batches = floor(n/batch_size)
+  samples = samples[1:(num_batches*batch_size)]
+  batch_matrix = matrix(samples,nrow=batch_size,ncol=num_batches,byrow=FALSE)
+  batch_means = colMeans(batch_matrix)
+  mean = mean(batch_means)
+  nse = sqrt((sum((batch_means-mean)^2))/(num_batches*(num_batches-1)))
+  return(nse)
+}
+
+batch_size = 25
+chain1_NSE = NSE(chain1,batch_size);chain1_NSE
+chain2_NSE = NSE(chain2,batch_size);chain2_NSE
+chain3_NSE = NSE(chain3,batch_size);chain3_NSE
+chain4_NSE = NSE(chain4,batch_size);chain4_NSE
+chain5_NSE = NSE(chain5,batch_size);chain5_NSE
+```
+
+(6) check the goodness of the fit of the model using the Bayesian predictive
+```{r}
+phi_mean = Reduce(`+`,list)/1000
+sampling_prediction = rep(0,N)
+samp = rep(0,N)
+for (i in 1:N){
+  sampling_prediction[i] = exp(phi_mean%*%X_mod[i,])/(1+exp(phi_mean%*%X_mod[i,]))
+  samp[i] = rbinom(1,1,sampling_prediction)
+}
+mean(dat$sampling==dat$samping_pre)
+dat$samping_pre = samp
+```
+
+3. which $\pi_{i}$ is good
+
+(1) get 1/pi and check goodness
+```{r}
+nu = X_mod[1:39,]
+w = rep(0,1000)
+for (i in 1:1000){
+  for (j in 1:39){
+    pis = rep(0,39)
+    weights = rep(0,39)
+    pis[j] = exp(t(nu[j,])%*%t(list[[i]]))/(1+exp(t(nu[j,])%*%t(list[[i]])))
+    weights[j] = 1/pis[j]
+    weights_sum = sum(weights)
+  }
+  w[i] = weights_sum
+}
+```
+(2) select $sum_{i=1}^{n}1/\pi_{i}=N$
+```{r}
+closestIndex = which.min(abs(w-439))
+closestValve = w[closestIndex]
+phi_est = list[[closestIndex]]
+pi = rep(0,39)
+for (i in 1:39){
+  pi[i] = exp(t(nu[i,])%*%t(phi_est))/(1+exp(t(nu[i,])%*%t(phi_est)))
+}
+pi
+```
+
+
+4. original survey weights & adjusted survey weights
+```{r}
+W = 439*(1/pi)/(sum(1/pi))
+validSampleSize = (sum(W))^2/((sum(W))^2)
+w = validSampleSize*W/(sum(W))
+```
+
+
+5.impute counterfactual potential outcome
+```{r}
+dat_samp = dat[1:39,]
+datC = dat_samp[dat_samp$x2 == 0,]
+datT = dat_samp[dat_samp$x2 == 1,]
+cmod = lm(y~x3+x4+x5,data=datC)
+tmod = lm(y~x3+x4+x5,data=datT)
+chat = predict(cmod,dat_samp[,c('x3','x4','x5')])
+that = predict(tmod,dat_samp[,c('x3','x4','x5')])
+dat_samp$chat = chat
+dat_samp$that = that
+```
+
+6. calculate posterior distribution of $\beta_{0},\sigma_{0},\sigma_{1},\rho,\tau$
+
+(1) initial values
+```{r}
+y0 = dat_samp$chat
+y1 = dat_samp$that
+tau = rep(0,11000)
+beta = list()
+sigma0 = rep(0,11000)
+sigma1 = rep(0,11000)
+rho = rep(0,11000)
+sigma0[1] = var(y0);sigma01 = sigma0[1]
+sigma1[1] = var(y1);sigma11 = sigma1[1]
+mod = lm(y~x2+x3+x4+x5,data=dat_samp)
+tau[1] = coef(mod)['x2'];tau1= tau[1]
+rho[1] = cor(y0,y1);rho1 = rho[1]
+beta[[1]] = t(coef(mod));beta1 = beta[[1]]
+```
+
+(2) Gibbs sampler
+```{r}
+set.seed(123)
+v = model.matrix(mod)
+for(j in 2:11000) {
+  for(i in 1:5) {
+    PDbeta = function(beta1){
+      for (z in 1:39){
+        return(exp(-1/(2*1-rho[j-1]^2)*(sum((y0[z]-v[z,]%*%beta1)^2/(sigma0[j-1]/w[z]))+sum((y1[z]-v[z,]%*%beta1-tau[j-1])^2/(sigma1[j-1]/w[z]))-2*rho[j-1]*sum((y0[z]-v[z,]%*%beta1)*(y1[z]-v[z,]%*%beta1-tau[j-1])/(sqrt(sigma0[j-1]*sigma1[j-1])/w[z])))))
+      }
+    }
+      for (z in 1:39){
+        covariance = list()
+        covariance[[z]] = matrix(c(sigma0[1]/w[z],sqrt(sigma0[1]*sigma1[1])/w[z],sigma1[1]/w[z],sqrt(sigma0[1]*sigma1[1])/w[z]),nrow=2,ncol=2)
+        beta2 = mvrnorm(n = 1, mu=beta1, Sigma = diag(5))#covariance[[z]])
+        U = runif(1)
+        if (U <= PDbeta(beta2)/PDbeta(beta1)){
+          beta1 = beta2
+        }else{
+          beta1 = beta1
+        }
+        beta[[j]] = beta1
+      }
+  }
+  PDsigma0 =  function(sigma01){
+    for (z in 1:39){
+        return((w[z]/sqrt(sigma01*sigma1[j-1]))^39*exp(-1/(2*1-rho[j-1]^2)*(sum((y0[z]-v[z,]%*%beta1)^2/(sigma01/w[z]))-2*rho[j-1]*sum((y0[z]-v[z,]%*%beta1)*(y1[z]-v[z,]%*%beta1-tau[j-1])/(sqrt(sigma01*sigma1[j-1])/w[z])))))
+    }
+  }
+  for (z in 1:39){
+    sigma02 = rexp(n = 1, shape=1/sigma0[1])
+    U = runif(1)
+    if (U<=PDsigma0(sigma02)/sigma0(sigma01)){
+      sigma01 = sigma02
+      }else{
+        sigma01 = sigma01
+        }
+        sigma0[j] = sigma01
+  }
+  PDsigma1 =  function(sigma11){
+    for (z in 1:39){
+        return((w[z]/sqrt(sigma01*sigma11))^39*exp(-1/(2*1-rho[j-1]^2)*(sum((y1[z]-v[z,]%*%beta1-tau[j-1])^2/(sigma11/w[z]))-2*rho[j-1]*sum((y0[z]-v[z,]%*%beta1)*(y1[z]-v[z,]%*%beta1-tau[j-1])/(sqrt(sigma01*sigma11)/w[z])))))
+    }
+  }
+  for (z in 1:39){
+    sigma12 = rexp(n = 1, shape=1/sigma0[1])
+    U = runif(1)
+    if (U<=PDsigma1(sigma12)/sigma1(sigma11)){
+      sigma11 = sigma12
+      }else{
+        sigma11 = sigma11
+        }
+        sigma1[j] = sigma11
+  }
+  PDtau = function(tau1){
+    for (z in 1:39){
+      return(exp(-1/(2*1-rho[j-1]^2)*(sum((y1[z]-v[z,]%*%beta1-tau1)^2/(sigma11/w[z]))-2*rho[j-1]*sum((y0[z]-v[z,]%*%beta1)*(y1[z]-v[z,]%*%beta1-tau1)/(sqrt(sigma01*sigma11)/w[z])))))
+    }
+  }
+  for (z in 1:39){
+    tau2 = rnorm(n = 1, mu = tau1, sd = 0.7931246)
+    U = runif(1)
+    if (U<=PDtau(tau2)/PDtau(tau1)){
+      tau1 = tau2
+      }else{
+        tau1 = tau1
+        }
+        tau[j] = tau1
+  }
+  PDrho = function(rho1){
+    for (z in 1:39){
+      return((1-rho1)^(-39/2)*exp(-1/(2*1-rho1^2)*(sum((y0[z]-v[z,]%*%beta1)^2/(sigma01/w[z]))+sum((y1[z]-v[z,]%*%beta1-tau1)^2/(sigma11/w[z]))-2*rho1*sum((y0[z]-v[z,]%*%beta1)*(y1[z]-v[z,]%*%beta1-tau1)/(sqrt(sigma01*sigma11)/w[z])))))
+    }
+  }
+  for (z in 1:39){
+    rho2 = runif(1)
+    U = runif(1)
+    if (U<=PDrho(rho2)/PDrho(rho1)){
+      rho1 = rho2
+      }else{
+        rho1 = rho1
+        }
+        rho[j] = rho1
+  }
+  }
+```
+
