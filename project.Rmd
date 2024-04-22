@@ -1,19 +1,19 @@
 ---
 title: "MA556 project"
 output: html_document
-date: "2024-04-20"
+date: "2024-04-21"
 ---
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## MA556 project
 
 
-Team members: Haofan Zheng, Yanning Pei, Lijian Yu
 
-04/21/2023
+Team members:  Yanping Pei, Lijian Yu, Haofan Zheng
+
+
 
 ```{r }
 library(MASS)
@@ -59,7 +59,6 @@ data$sampling=c(rep(1,39),rep(0,439-39))
 
 # Step1. Impute missing mercury in blood within non-samples using model fitted within samples
 ```{r}
-#step 0: impute x5 (mercury level)
 
 
 n=39 #samples with known x5
@@ -121,7 +120,7 @@ if(F){
     s=exp(s)
   
     if(any(is.na(sigma))){
-      cat('use first sigma\n')
+      
       sigma=s
     }else{
       sigma=sigma+s
@@ -256,7 +255,7 @@ transition_probability=function(theta1, theta2,data){
 filepath<-"/Users/lijianyu/Personal/documents/WPI/MA556/project/theta_large.tsv"
 
 if(file.exists(filepath)){
-  x=vroom(filepath)
+  x=vroom(filepath,show_col_types = FALSE)
   theta2=as.data.frame(x)
   accepts=110001
   rejects=88803
@@ -301,11 +300,11 @@ if(file.exists(filepath)){
   theta2=do.call(rbind.data.frame, theta)
 }
 
+cat('acception ratio is ',accepts/(accepts+rejects))
 
 
 ```
 
-acception ratio is  $accepts/(accepts+rejects)$ 
 
 
 diagnostic for metropolis sampler
@@ -358,6 +357,7 @@ autocorr.plot(chains)
 x=effectiveSize(as.mcmc(theta3$x1))
 names(x)='effective size'
 x
+cat('Note: size of chain is 1090.')
 ```
 
 geweke test
@@ -513,7 +513,10 @@ density=function(beta0,t,sigma0,sigma1,rho,w,data,n){
   1/(sigma0*sigma1*sqrt(1-rho^2))*exp(-1/2/(1-rho^2)*(sum()))
 }
 
-if(run){
+if(file.exists("/Users/lijianyu/Personal/documents/WPI/MA556/project/tau.tsv")) {
+    taux=vroom("/Users/lijianyu/Personal/documents/WPI/MA556/project/tau.tsv",delim='\t',show_col_types = FALSE)
+    tau=unlist(taux$tau)
+}else{
   n=39
   y0 = data[1:n,'y0']
   y1 = data[1:n,'y1']
@@ -674,6 +677,7 @@ if(run){
   }
   
 }
+
 
 # burn in 10000, thin 100
 tau2=tau[seq(10001,110000,100)]
