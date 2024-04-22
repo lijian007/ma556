@@ -469,9 +469,7 @@ density=function(beta0,t,sigma0,sigma1,rho,w,data,n){
   1/(sigma0*sigma1*sqrt(1-rho^2))*exp(-1/2/(1-rho^2)*(sum()))
 }
 
-for(i in 1:M){
-  
-}
+
 ```
 ```{r}
 n=39
@@ -551,6 +549,8 @@ density=function(beta0,tau,sigma0,sigma1,rho,w,xdata,n){
   1/(sigma0*sigma1*sqrt(1-rho^2))^n*exp(ev)
 }
 
+# density(beta1,tau1,sigma01,sigma11,rho2,w,data[1:n,],n)
+
 accepts_beta=0
 rejects_beta=0
 
@@ -564,7 +564,7 @@ rejects_tau=0
 
 accepts_rho=0
 rejects_rho=0
-for(j in 2:30) {
+for(j in 2:110000) {
       if(j%%100==0)cat('j=',j,'\n')
       #draw beta
       flag=T
@@ -585,6 +585,7 @@ for(j in 2:30) {
       flag=T
       while(flag){
         sigma02 =  rnorm(1,mean=sigma01,sd=0.01)
+        if(sigma02<0)sigma02=0.11
         U =runif(1)
         if (U <= density(beta1,tau1,sigma02,sigma11,rho1,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
           sigma01 = sigma02
@@ -597,14 +598,16 @@ for(j in 2:30) {
       }
       
       #draw sigma1 using grid method
-      sigma12 =grid_sampler(cpd_sigma1(beta1,tau1,sigma01,rho1,w,data[1:n,],n,s),s)
+      # sigma12 =grid_sampler(cpd_sigma1(beta1,tau1,sigma01,rho1,w,data[1:n,],n,s),s)
+      sigma12 =sigma11
       sigma11 = sigma12
       sigma1[j] = sigma11
 
       #draw tau
       flag=T
       while(flag){
-        tau2 = rnorm(n = 1, mean = tau1, sd = 0.7931246)
+        # tau2 = rnorm(n = 1, mean = tau1, sd = 0.7931246)
+        tau2 = runif( 1, 1,2 )
         U = runif(1)
         if (U <= density(beta1,tau2,sigma01,sigma11,rho1,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
           tau1 = tau2
@@ -616,9 +619,11 @@ for(j in 2:30) {
         }
       }
      #draw rho
-      flag=T
+      flag=F
       while(flag){
-        rho2 = rnorm(1,mean=rho1,sd=0.01)
+        # rho2 = rnorm(1,mean=rho1,sd=0.01)
+        # rho2 = runif(1)
+        # 
         U = runif(1)
         if (U <= density(beta1,tau1,sigma01,sigma11,rho2,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
           rho1 = rho2
@@ -631,8 +636,26 @@ for(j in 2:30) {
   
       }
 }
+summary(tau)
+if(F){
+  filepath<-"/Users/lijianyu/Personal/documents/WPI/MA556/project/tau.tsv"
+
+  writeLines("tau", filepath)
+  con=file(filepath,'a')
+  for(line in tau){
+    writeLines(paste(line,collapse='\t'),con)
+  }
+  close(con)
+}
+  
 ```
-## Including Plots
+```{r }
+mcmc_tau=as.mcmc(tau)
+plot(mcmc_tau)
+
+tau2=tau[seq(10001,110000,10)]
+tau2=tau2
+```
 
 You can also embed plots, for example:
 
