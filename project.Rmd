@@ -10,7 +10,10 @@ knitr::opts_chunk$set(echo = TRUE)
 
 ## MA556 project
 
-project
+
+Team members: Haofan Zheng, Yanning Pei, Lijian Yu
+
+04/21/2023
 
 ```{r }
 library(MASS)
@@ -20,6 +23,9 @@ library(rjags)
 ```
 
 ```{r }
+#read raw data
+run=F
+
 datafile='/Users/lijianyu/Personal/documents/WPI/MA556/project/project-chromosome.dat'
 con = file(datafile, "r")
 lines=readLines(con)
@@ -48,7 +54,14 @@ for(i in 1:N){
   data$y[i]=ifelse(y=='9999.0',NA,as.numeric(y))
 }
 data$sampling=c(rep(1,39),rep(0,439-39))
-#impute x5 (mercury level)
+```
+
+
+# Step1. Impute missing mercury in blood within non-samples using model fitted within samples
+```{r}
+#step 0: impute x5 (mercury level)
+
+
 n=39 #samples with known x5
 y=data$x5[1:n]
 X=as.matrix(data[1:n,c('x1','x2','x3','x4')])
@@ -58,113 +71,134 @@ for(i in (n+1):nrow(data)){
   x=data[i,c('x1','x2','x3','x4')]
   data$x5[i]=(unlist(x)%*%beta_hat)[1,1]
 }
+#NP
+if(run){
+  gamma_hat = solve(t(X)%*%X)%*%t(X)%*%y
+  delta_squared = var(y)
+  gamma_var = delta_squared*solve(t(X)%*%X)
+  set.seed(123)
+  gammas = rmvt(n=400,delta=t(gamma_hat),sigma=solve(gamma_var),df=35)
+  Xnew = dat[40:439,2:5]
+  zImputation = rep(0,400)
+  for (i in 1:400){
+    zImputation[i] = t(gamma_hat)%*%t(Xnew[i,])
+  }
+  dat[40:439,6] = zImputation
+}
+data$x5
+
+```
 
 
-#step1 use student t as the proposal generating density, the accepton rate is below 5%. not use it. see below for alternative ways (normal distribution)
+
+
+
+
+#step2: logistic regression, use normal density to propose new moves
+```{r}
 #metropolis sampling
 #use data[1:39,] 
-N=439
-v=as.matrix(data[1:N,c('x1','x2','x3','x4','x5')])
-v_t=t(v)
-y=data$sampling
-beta_hat=solve(v_t%*%v)%*%v_t%*%y
-
-
-#the matrix sigma
-sigma=NA
-
-for(i in 1:N){
-  v_i=t(data[i,c('x1','x2','x3','x4','x5')]) #column vector
-  v_it=t(v_i) #vector
-  
-  s=log(v_i%*%v_it)+(v_it%*%beta_hat)[1,1]-2*log(1+exp((v_it%*%beta_hat)[1,]))
-  s=exp(s)
-  
-  if(any(is.na(sigma))){
-    cat('use first sigma\n')
-    sigma=s
-  }else{
-    sigma=sigma+s
-  }
-}
-# sigma=round(sigma)
-sigma=solve(sigma)
-sigma=(sigma+t(sigma))/2. #to make it symmetrical
-
-#target density: f(thea | I)
-#candidate generating density: student t(beta_hat, v=N-4,sigma)
-
-log_target_density=function(psi,X,y){
-  #calculate target density, input psi is the column vector of covariant coefficients
-  sum(sapply(1:nrow(X),function(i){
-    v_i=t(X[i,]) #column vector
-    v_it=t(v_i) #vector
-    # y=data$sampling #known result
-    z=v_it%*%t(psi)
-    if(z>700)z=700
-    x=(z*y[i])-log(1+exp(z))
-    x
-  }))
-}
-
-transition_probability=function(theta1, theta2,df,sigma,data){
-  #calculate transition_probability for Metropolis
-  X=data[,c('x1','x2','x3','x4','x5')]
+if(F){
+    
+ #use student t as the proposal generating density, the accepton rate is below 5%. not use it. see below for alternative ways (normal distribution)
+  #metropolis sampling
+  #use data[1:39,]
+  N=439
+  v=as.matrix(data[1:N,c('x1','x2','x3','x4','x5')])
+  v_t=t(v)
   y=data$sampling
-  tds2=log_target_density(theta2,X,y)-log(dmvt(theta2,mu=t(beta_hat),S=sigma,df=df))
-  tds1=log_target_density(theta1,X,y)-log(dmvt(theta1,mu=t(beta_hat),S=sigma,df=df))
-  min(1,exp(tds2-tds1))
-}
-
-#test different nu to get sample ratio (0.25,0.75)
-nu=c(5,100,200,10,20,30,40,50)
-
-for(i in 1:length(nu)){
-  cat('i=',i,'nu[i]=',nu[i],'\n')
-  theta=list()
-  # theta1=matrix(c(1,1,1,1),nrow=1,dimnames=list(NULL,c('x1','x3','x4','x5')))
-  theta1=t(beta_hat)
-  M=100
-  j=1
-  theta[[j]]=theta1
-  accepts=0
-  rejects=0
-  skip=0
-  while(rejects+accepts<=M){
-    theta2=rmvt(1,mu=t(beta_hat), S=sigma,df=nu[i])
-    r=transition_probability(theta1,theta2,nu[i],sigma,data)
-    skip=skip-1
-    if(skip<0){
-      if(runif(1,0,1)<r){
-        accepts=accepts+1
-        j=j+1
-        theta1=theta2
-        theta[[j]]=theta1
-      }else{
-        rejects=rejects+1
-      }
+  beta_hat=solve(v_t%*%v)%*%v_t%*%y
+  
+  
+  #the matrix sigma
+  sigma=NA
+  
+  for(i in 1:N){
+    v_i=t(data[i,c('x1','x2','x3','x4','x5')]) #column vector
+    v_it=t(v_i) #vector
+  
+    s=log(v_i%*%v_it)+(v_it%*%beta_hat)[1,1]-2*log(1+exp((v_it%*%beta_hat)[1,]))
+    s=exp(s)
+  
+    if(any(is.na(sigma))){
+      cat('use first sigma\n')
+      sigma=s
+    }else{
+      sigma=sigma+s
     }
   }
+  # sigma=round(sigma)
+  sigma=solve(sigma)
+  sigma=(sigma+t(sigma))/2. #to make it symmetrical
   
-  cat('acception ratio for nu=',nu[i],'is',accepts/(accepts+rejects),'\n')
+  #target density: f(thea | I)
+  #candidate generating density: student t(beta_hat, v=N-4,sigma)
+  
+  log_target_density=function(psi,X,y){
+    #calculate target density, input psi is the column vector of covariant coefficients
+    sum(sapply(1:nrow(X),function(i){
+      v_i=t(X[i,]) #column vector
+      v_it=t(v_i) #vector
+      # y=data$sampling #known result
+      z=v_it%*%t(psi)
+      if(z>700)z=700
+      x=(z*y[i])-log(1+exp(z))
+      x
+    }))
+  }
+  
+  transition_probability=function(theta1, theta2,df,sigma,data){
+    #calculate transition_probability for Metropolis
+    X=data[,c('x1','x2','x3','x4','x5')]
+    y=data$sampling
+    tds2=log_target_density(theta2,X,y)-log(dmvt(theta2,mu=t(beta_hat),S=sigma,df=df))
+    tds1=log_target_density(theta1,X,y)-log(dmvt(theta1,mu=t(beta_hat),S=sigma,df=df))
+    min(1,exp(tds2-tds1))
+  }
+  
+  #test different nu to get sample ratio (0.25,0.75)
+  nu=c(5,100,200,10,20,30,40,50)
+  
+  for(i in 1:length(nu)){
+    cat('i=',i,'nu[i]=',nu[i],'\n')
+    theta=list()
+    # theta1=matrix(c(1,1,1,1),nrow=1,dimnames=list(NULL,c('x1','x3','x4','x5')))
+    theta1=t(beta_hat)
+    M=100
+    j=1
+    theta[[j]]=theta1
+    accepts=0
+    rejects=0
+    skip=0
+    while(rejects+accepts<=M){
+      theta2=rmvt(1,mu=t(beta_hat), S=sigma,df=nu[i])
+      r=transition_probability(theta1,theta2,nu[i],sigma,data)
+      skip=skip-1
+      if(skip<0){
+        if(runif(1,0,1)<r){
+          accepts=accepts+1
+          j=j+1
+          theta1=theta2
+          theta[[j]]=theta1
+        }else{
+          rejects=rejects+1
+        }
+      }
+    }
+  
+    cat('acception ratio for nu=',nu[i],'is',accepts/(accepts+rejects),'\n')
+  }
+  # i= 1 nu[i]= 10
+  # acception ratio for nu= 10 is 0.01980198
+  # i= 2 nu[i]= 20
+  # acception ratio for nu= 20 is 0.05940594
+  # i= 3 nu[i]= 30
+  # acception ratio for nu= 30 is 0.04950495
+  # i= 4 nu[i]= 40
+  # acception ratio for nu= 40 is 0.02970297
+  # i= 5 nu[i]= 50
+  # acception ratio for nu= 50 is 0.03960396
 }
-# i= 1 nu[i]= 10 
-# acception ratio for nu= 10 is 0.01980198 
-# i= 2 nu[i]= 20 
-# acception ratio for nu= 20 is 0.05940594 
-# i= 3 nu[i]= 30 
-# acception ratio for nu= 30 is 0.04950495 
-# i= 4 nu[i]= 40 
-# acception ratio for nu= 40 is 0.02970297 
-# i= 5 nu[i]= 50 
-# acception ratio for nu= 50 is 0.03960396 
-
-
-
-
-#step1: use normal density to propose new moves
-#metropolis sampling
-#use data[1:39,] 
 N=439
 v=as.matrix(data[1:N,c('x1','x2','x3','x4','x5')])
 v_t=t(v)
@@ -270,9 +304,14 @@ if(file.exists(filepath)){
 
 
 ```
+
 acception ratio is  $accepts/(accepts+rejects)$ 
 
+
+diagnostic for metropolis sampler
+
 ```{r }
+
 theta3=theta2[seq(1001,M,100),]
 
 chains=as.mcmc.list(lapply(as.data.frame(theta3), mcmc))
@@ -317,26 +356,28 @@ autocorr.plot(chains)
 
 ```{r }
 x=effectiveSize(as.mcmc(theta3$x1))
+names(x)='effective size'
 x
 ```
 
-
+geweke test
 ```{r }
 x=geweke.diag(chains, frac1=0.1, frac2=0.5)
 x
-pnorm(x$x1$z)
-pnorm(x$x2$z)
-
+a=pnorm(x$x1$z)
+names(a)='p of vlue of x1'
+a
 ```
 
 ```{r }
-batchSE(as.mcmc(theta3), batchSize=100)
-
+a=batchSE(as.mcmc(theta3), batchSize=100)
+print('NSE')
+a
 ```
 
-
+#step 3 and 4 : calculate pi and find the best psi and the corresponding pi
 ```{r }
-#step 2 and step 3
+
 n_theta=nrow(theta3)
 n=39
 N=439
@@ -357,17 +398,18 @@ for(k in 1:n_theta){
   list2[[k]]=list(k=k,psi=psi_k,pi=pi_i, sampling_rate=sampling_rate,distance=abs(sampling_rate-N))
 }
 
-#step 3, find the best psi and the corresponding pi
 min_distance=min(sapply(list2,function(x){x$distance}))
 best_pi=unlist(list2[[which(sapply(list2,function(x){x$distance==min_distance}))]]$pi)
+print('best pi')
 best_pi
 
 
 
 
 ```
+#step 5.calculate W the original weights
+
 ```{r }
-#step 4.calculate W
 W=rep(NA,n)
 N=439
 for(i in 1:n){
@@ -377,20 +419,20 @@ for(i in 1:n){
 W
 
 ```
+#step 6.calculate n_hat
 ```{r }
-#step 5.calculate n_hat
 n_hat=sum(W)^2/sum(W^2)
 n_hat
 ```
+#step 7.calculate w
 ```{r }
-#step 6.calculate w
 w=n_hat*W/sum(W)
 
 w
 
 ```
+#step 8.impute missing counter factual outcome y0, y1
 ```{r }
-#step 7.impute missing y0, y1
 
 data_y0=data[data$sampling==1&data$x2==0,]
 data_y1=data[data$sampling==1&data$x2==1,]
@@ -411,13 +453,14 @@ for(i in 1:n){
   data$y0[i]=(unlist(x)%*%beta_hat_y0)[1,1]
   data$y1[i]=(unlist(x)%*%beta_hat_y1)[1,1]
 }
-data[1:n,]
+data[1:n,c('y0','y1')]
 
 ```
 
+#step 9.calculate posterior beta0, tau, sigma0, sigma1, rho
 ```{r }
-#step 8.calculate posterior beta0, t, deta0, deta1, ro
 #starting values
+
 df=as.matrix(data[1:n,c('x1','x2','x3','x4','x5')])
 df_t=t(df)
 beta0=solve(df_t%*%df)%*%df_t%*%data[1:n,'y']
@@ -434,30 +477,31 @@ model.data=list(
   b0=beta0
   
 )
+#tried JAGS, it is not working for matrix parameter in the model
 # model.params=c('t','beta0','sigma0','sigma1','rho',)
-model.inits=list(t=t,beta0=beta0,sigma0=sigma0,sigma1=sigma1,rho=0.5)
-iterations=11000
-modelString="
-  model{
-    for(i in 1:n){
-        dmat[2*i+1,2*i+1]=sigma0^2/w[i]
-        dmat[2*i+1,2*i+2]=rho*sigma0*sigma1/w[i]
-        dmat[2*i+2,2*i+1]=rho*sigma0*sigma1/w[i]
-        dmat[2*i+2,2*i+2]=sigma1^2/w[i]
-        mu[0]=inprod(v[i,],beta0)
-        mu[1]=t+inprod(v[i,],beta0)
-        y[i,]~dmnorm(mu,dmat[(2*i+1):(2*i+2),(2*i+1):(2*i+2)])
-    }
-    rho~dunif(0,1)
-    t~dexp(0.0001)
-    beta0~dmnorm(b0,identity)
-    sigma0~dunif(0,1)
-    sigma1~dunif(0,1)
-  }
-
-"
-writeLines(modelString,con="tempmodel.txt")
-jagsModel=jags.model(file="tempmodel.txt",data=model.data,inits=model.inits)
+# model.inits=list(t=t,beta0=beta0,sigma0=sigma0,sigma1=sigma1,rho=0.5)
+# iterations=11000
+# modelString="
+#   model{
+#     for(i in 1:n){
+#         dmat[2*i+1,2*i+1]=sigma0^2/w[i]
+#         dmat[2*i+1,2*i+2]=rho*sigma0*sigma1/w[i]
+#         dmat[2*i+2,2*i+1]=rho*sigma0*sigma1/w[i]
+#         dmat[2*i+2,2*i+2]=sigma1^2/w[i]
+#         mu[0]=inprod(v[i,],beta0)
+#         mu[1]=t+inprod(v[i,],beta0)
+#         y[i,]~dmnorm(mu,dmat[(2*i+1):(2*i+2),(2*i+1):(2*i+2)])
+#     }
+#     rho~dunif(0,1)
+#     t~dexp(0.0001)
+#     beta0~dmnorm(b0,identity)
+#     sigma0~dunif(0,1)
+#     sigma1~dunif(0,1)
+#   }
+# 
+# "
+# writeLines(modelString,con="tempmodel.txt")
+# jagsModel=jags.model(file="tempmodel.txt",data=model.data,inits=model.inits)
 
 
 density=function(beta0,t,sigma0,sigma1,rho,w,data,n){
@@ -469,198 +513,198 @@ density=function(beta0,t,sigma0,sigma1,rho,w,data,n){
   1/(sigma0*sigma1*sqrt(1-rho^2))*exp(-1/2/(1-rho^2)*(sum()))
 }
 
+if(run){
+  n=39
+  y0 = data[1:n,'y0']
+  y1 = data[1:n,'y1']
+  tau = rep(0,11000)
+  beta = list()
+  sigma0 = rep(0,11000)
+  sigma1 = rep(0,11000)
+  rho = rep(0,11000)
+  sigma0[1] = var(y0);
+  sigma01 = sigma0[1]
+  sigma1[1] = var(y1);
+  sigma11 = sigma1[1]
+  mod = lm(y~x2+x3+x4+x5,data=data[1:n,])
+  tau[1] = coef(mod)['x2'];
+  tau1= tau[1]
+  rho[1] = cor(y0,y1);
+  rho1 = rho[1]
+  beta[[1]] = t(coef(mod));
+  beta1 = t(beta[[1]])
+  
+  set.seed(123)
+  
+  
+  s=seq(0.01,0.99,0.001)
+  grid_sampler=function(lh,s){
+    h=exp(lh-max(lh))/sum(exp(lh-max(lh)))
+    draw=sample(s,1, prob=h)
+    draw_jitter=runif(1,draw-0.0005,draw+0.0005)
+    draw_jitter
+  }
+  cpd_sigma1=function(beta0,tau,sigma0,rho,w,xdata,n,s){
+    #return log density for all values in s
+    t=tau
+    d=rep(NA,length(s))
+    for(k in 1:length(s)){
+      h=s[k]
+      A=sapply(1:n,function(i){(xdata[i,'y0']-as.matrix(xdata[i,c('x1','x2','x3','x4','x5')])%*%beta0)/(sigma0/sqrt(w[i]))})
+      Bp=sapply(1:n,function(i){(xdata[i,'y1']-(t+as.matrix(xdata[i,c('x1','x2','x3','x4','x5')])%*%beta0))/((1/h-1)/sqrt(w[i]))})
+      d_1=-n*log(1/h-1)-1/(2*(1-rho**2))*(-2*rho*sum(A*Bp)+sum(Bp**2))-2*log(h)
+      d[k]=d_1
+      
+    }
+    d
+  }
+  
+  density=function(beta0,tau,sigma0,sigma1,rho,w,xdata,n){
+    #data has columns: x1, x2, x3,x4, x5,y0,y1
+    t=tau
+    A=sapply(1:n,function(i){
+      (xdata[i,'y0']-as.matrix(xdata[i,c('x1','x2','x3','x4','x5')])%*%beta0)/(sigma0/sqrt(w[i]))
+    })
+    B=sapply(1:n,function(i){
+      (xdata[i,'y1']-(t+as.matrix(xdata[i,c('x1','x2','x3','x4','x5')])%*%beta0))/(sigma1/sqrt(w[i]))
+    })
+    ev=-1/(2*(1-rho^2))*(sum(A^2))-2*rho*sum(A*B)+sum(B**2)
+    if(ev>100)ev=100
+    if((sigma0*sigma1*sqrt(1-rho^2))^n<1e-100){
+      return(1e-100)
+    }
+    1/(sigma0*sigma1*sqrt(1-rho^2))^n*exp(ev)
+  }
+  
+  accepts_beta=0
+  rejects_beta=0
+  
+  accepts_sigma0=0
+  rejects_sigma0=0
+  
+  
+  
+  accepts_tau=0
+  rejects_tau=0
+  
+  accepts_rho=0
+  rejects_rho=0
+  for(j in 2:110000) {
+        if(j%%100==0)cat('j=',j,'\n')
+        #draw beta
+        flag=T
+        while(flag){
+          beta2 = as.matrix(mvrnorm(n = 1, mu=beta1, Sigma = diag(5)))
+          U = runif(1)
+          if (U <= density(beta2,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
+            beta1 = beta2
+            beta[[j]] = beta2
+            flag=F
+            accepts_beta=accepts_beta+1
+          }else{
+            rejects_beta=rejects_beta+1
+          }
+        }
+        
+        #draw sigma0
+        flag=T
+        while(flag){
+          sigma02 =  rnorm(1,mean=sigma01,sd=0.01)
+          if(sigma02<0)sigma02=0.11
+          U =runif(1)
+          if (U <= density(beta1,tau1,sigma02,sigma11,rho1,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
+            sigma01 = sigma02
+            sigma0[j] = sigma01
+            flag=F
+            accepts_sigma0=accepts_sigma0+1
+          }else{
+            rejects_sigma0=rejects_sigma0+1
+          }
+        }
+        
+        #draw sigma1 using grid method
+        # sigma12 =grid_sampler(cpd_sigma1(beta1,tau1,sigma01,rho1,w,data[1:n,],n,s),s)
+        sigma12 =sigma11
+        sigma11 = sigma12
+        sigma1[j] = sigma11
+  
+        #draw tau
+        flag=T
+        while(flag){
+          # tau2 = rnorm(n = 1, mean = tau1, sd = 0.7931246)
+          tau2 = runif( 1, 1,2 )
+          U = runif(1)
+          if (U <= density(beta1,tau2,sigma01,sigma11,rho1,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
+            tau1 = tau2
+            tau[j] = tau1
+            flag=F
+            accepts_tau=accepts_tau+1
+          }else{
+            rejects_tau=rejects_tau+1
+          }
+        }
+       #draw rho
+        flag=F
+        while(flag){
+          # rho2 = rnorm(1,mean=rho1,sd=0.01)
+          # rho2 = runif(1)
+          # 
+          U = runif(1)
+          if (U <= density(beta1,tau1,sigma01,sigma11,rho2,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
+            rho1 = rho2
+            rho[j] = rho1
+            flag=F
+            accepts_rho=accepts_rho+1
+          }else{
+            rejects_rho=rejects_rho+1
+          }
+    
+        }
+  }
+  summary(tau)
+  if(F){
+    filepath<-"/Users/lijianyu/Personal/documents/WPI/MA556/project/tau.tsv"
+  
+    writeLines("tau", filepath)
+    con=file(filepath,'a')
+    for(line in tau){
+      writeLines(paste(line,collapse='\t'),con)
+    }
+    close(con)
+  }
+  
+}
+
+# burn in 10000, thin 100
+tau2=tau[seq(10001,110000,100)]
+# print(tau2)
+mcmc_tau=as.mcmc(tau2)
+# plot(mcmc_tau)
 
 ```
 ```{r}
-n=39
-y0 = data[1:n,'y0']
-y1 = data[1:n,'y1']
-tau = rep(0,11000)
-beta = list()
-sigma0 = rep(0,11000)
-sigma1 = rep(0,11000)
-rho = rep(0,11000)
-sigma0[1] = var(y0);
-sigma01 = sigma0[1]
-sigma1[1] = var(y1);
-sigma11 = sigma1[1]
-mod = lm(y~x2+x3+x4+x5,data=data[1:n,])
-tau[1] = coef(mod)['x2'];
-tau1= tau[1]
-rho[1] = cor(y0,y1);
-rho1 = rho[1]
-beta[[1]] = t(coef(mod));
-beta1 = t(beta[[1]])
-
-set.seed(123)
-
-
-s=seq(0.01,0.99,0.001)
-grid_sampler=function(lh,s){
-  h=exp(lh-max(lh))/sum(exp(lh-max(lh)))
-  draw=sample(s,1, prob=h)
-  draw_jitter=runif(1,draw-0.0005,draw+0.0005)
-  draw_jitter
-}
-cpd_sigma1=function(beta0,tau,sigma0,rho,w,xdata,n,s){
-  #return log density for all values in s
-  t=tau
-  d=rep(NA,length(s))
-  for(k in 1:length(s)){
-    h=s[k]
-    A=sapply(1:n,function(i){(xdata[i,'y0']-as.matrix(xdata[i,c('x1','x2','x3','x4','x5')])%*%beta0)/(sigma0/sqrt(w[i]))})
-    Bp=sapply(1:n,function(i){(xdata[i,'y1']-(t+as.matrix(xdata[i,c('x1','x2','x3','x4','x5')])%*%beta0))/((1/h-1)/sqrt(w[i]))})
-    d_1=-n*log(1/h-1)-1/(2*(1-rho**2))*(-2*rho*sum(A*Bp)+sum(Bp**2))-2*log(h)
-    d[k]=d_1
-    
-  }
-  d
-}
-
-
-
-density=function(beta0,tau,sigma0,sigma1,rho,w,xdata,n){
-  #data has columns: x1, x2, x3,x4, x5,y0,y1
-  #n=39
-  t=tau
-  A=sapply(1:n,function(i){
-    (xdata[i,'y0']-as.matrix(xdata[i,c('x1','x2','x3','x4','x5')])%*%beta0)/(sigma0/sqrt(w[i]))
-  })
-  # print(A)
-  B=sapply(1:n,function(i){
-    (xdata[i,'y1']-(t+as.matrix(xdata[i,c('x1','x2','x3','x4','x5')])%*%beta0))/(sigma1/sqrt(w[i]))
-  })
-  # print(B)
-  ev=-1/(2*(1-rho^2))*(sum(A^2))-2*rho*sum(A*B)+sum(B**2)
-  # print('ev')
-  # print(ev)
-  # print(n)
-  if(ev>100)ev=100
-  # print(sigma0)
-  # print(sigma1)
-  # print('1-roh2')
-  # print((1-rho^2))
-  # print(sigma0*sigma1*sqrt(1-rho^2))
-  if((sigma0*sigma1*sqrt(1-rho^2))^n<1e-100){
-    return(1e-100)
-  }
-  # print((sigma0*sigma1*sqrt(1-rho^2))^n)
-  # print((sigma0*sigma1*sqrt(1-rho^2))^n*exp(ev))
-  1/(sigma0*sigma1*sqrt(1-rho^2))^n*exp(ev)
-}
-
-# density(beta1,tau1,sigma01,sigma11,rho2,w,data[1:n,],n)
-
-accepts_beta=0
-rejects_beta=0
-
-accepts_sigma0=0
-rejects_sigma0=0
-
-
-
-accepts_tau=0
-rejects_tau=0
-
-accepts_rho=0
-rejects_rho=0
-for(j in 2:110000) {
-      if(j%%100==0)cat('j=',j,'\n')
-      #draw beta
-      flag=T
-      while(flag){
-        beta2 = as.matrix(mvrnorm(n = 1, mu=beta1, Sigma = diag(5)))
-        U = runif(1)
-        if (U <= density(beta2,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
-          beta1 = beta2
-          beta[[j]] = beta2
-          flag=F
-          accepts_beta=accepts_beta+1
-        }else{
-          rejects_beta=rejects_beta+1
-        }
-      }
-      
-      #draw sigma0
-      flag=T
-      while(flag){
-        sigma02 =  rnorm(1,mean=sigma01,sd=0.01)
-        if(sigma02<0)sigma02=0.11
-        U =runif(1)
-        if (U <= density(beta1,tau1,sigma02,sigma11,rho1,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
-          sigma01 = sigma02
-          sigma0[j] = sigma01
-          flag=F
-          accepts_sigma0=accepts_sigma0+1
-        }else{
-          rejects_sigma0=rejects_sigma0+1
-        }
-      }
-      
-      #draw sigma1 using grid method
-      # sigma12 =grid_sampler(cpd_sigma1(beta1,tau1,sigma01,rho1,w,data[1:n,],n,s),s)
-      sigma12 =sigma11
-      sigma11 = sigma12
-      sigma1[j] = sigma11
-
-      #draw tau
-      flag=T
-      while(flag){
-        # tau2 = rnorm(n = 1, mean = tau1, sd = 0.7931246)
-        tau2 = runif( 1, 1,2 )
-        U = runif(1)
-        if (U <= density(beta1,tau2,sigma01,sigma11,rho1,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
-          tau1 = tau2
-          tau[j] = tau1
-          flag=F
-          accepts_tau=accepts_tau+1
-        }else{
-          rejects_tau=rejects_tau+1
-        }
-      }
-     #draw rho
-      flag=F
-      while(flag){
-        # rho2 = rnorm(1,mean=rho1,sd=0.01)
-        # rho2 = runif(1)
-        # 
-        U = runif(1)
-        if (U <= density(beta1,tau1,sigma01,sigma11,rho2,w,data[1:n,],n)/density(beta1,tau1,sigma01,sigma11,rho1,w,data[1:n,],n)){
-          rho1 = rho2
-          rho[j] = rho1
-          flag=F
-          accepts_rho=accepts_rho+1
-        }else{
-          rejects_rho=rejects_rho+1
-        }
+  mcmc_tau=as.mcmc(tau2)
+  # plot(mcmc_tau)
   
-      }
-}
-summary(tau)
-if(F){
-  filepath<-"/Users/lijianyu/Personal/documents/WPI/MA556/project/tau.tsv"
-
-  writeLines("tau", filepath)
-  con=file(filepath,'a')
-  for(line in tau){
-    writeLines(paste(line,collapse='\t'),con)
-  }
-  close(con)
-}
+  traceplot(mcmc_tau)
   
 ```
-```{r }
-mcmc_tau=as.mcmc(tau)
-plot(mcmc_tau)
 
-tau2=tau[seq(10001,110000,10)]
-tau2=tau2
+```{r}
+ 
+  Interval <- HPDinterval(mcmc_tau)
+  plot(stats::density(mcmc_tau),main = "")+
+  abline(v=c(Interval[1,1],Interval[1,2]), col="blue",lty = 2)
 ```
 
-You can also embed plots, for example:
 
-```{r pressure, echo=FALSE}
-plot(pressure)
+```{r}
+ 
+  Geweke_test_tau <- geweke.diag(mcmc_tau, frac1=0.1, frac2=0.5)
+  pvalue_tau <- 2*(1-pnorm(abs(Geweke_test_tau$z)))
+  
+  names(pvalue_tau)='pvalue_tau'
+  pvalue_tau
+  cat('\nLarge p value of Geweke test indicates MCMC sampling chains are converged!\n')
+  
 ```
-
-Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
